@@ -33,14 +33,17 @@ const paymentsConfig = paymentsFromEnv({
   defaultPrice: process.env.DEFAULT_PRICE,
 });
 
+const AGENT_NAMESPACE = "tv-show-recommender";
+const AGENT_DISPLAY_NAME = "TV Show Recommender";
+
 const axClient = createAxLLMClient({
   model: process.env.AX_MODEL?.trim() || "gpt-5-mini",  
   logger: {
     warn(message, error) {
       if (error) {
-        console.warn(`[tv-show-reco] ${message}`, error);
+        console.warn(`[${AGENT_NAMESPACE}] ${message}`, error);
       } else {
-        console.warn(`[tv-show-reco] ${message}`);
+        console.warn(`[${AGENT_NAMESPACE}] ${message}`);
       }
     },
   },
@@ -48,7 +51,7 @@ const axClient = createAxLLMClient({
 
 if (!axClient.isConfigured()) {
   console.warn(
-    "[tv-show-reco] Ax LLM provider not configured — requests will fail until an LLM key is provided."
+    `[${AGENT_NAMESPACE}] Ax LLM provider not configured — requests will fail until an LLM key is provided.`
   );
 }
 
@@ -69,10 +72,10 @@ const recommendationFlow = flow<{ prompt: string }>()
 
 const { app, addEntrypoint } = createAgentApp(
   {
-    name: "tv-show-reco",
+    name: AGENT_DISPLAY_NAME,
     version: "0.2.0",
     description:
-      "Curates binge-worthy TV shows by tapping an Ax LLM that tailors picks to the viewer's vibe.",
+      "Curates binge-worthy TV shows that tailors picks to the viewer's vibe.",
   },
   paymentsConfig ? { payments: paymentsConfig } : undefined
 );

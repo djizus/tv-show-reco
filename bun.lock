@@ -2,7 +2,7 @@
   "lockfileVersion": 1,
   "workspaces": {
     "": {
-      "name": "tv-show-reco",
+      "name": "tv-show-recommender",
       "dependencies": {
         "@ax-llm/ax": "latest",
         "@lucid-dreams/agent-kit": "latest",

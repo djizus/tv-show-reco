@@ -1,4 +1,4 @@
-# TV Show Reco
+# TV Show Recommender
 
 An Ax-powered refresh of the Lucid TV recommender. Instead of a local catalogue, the agent now leans entirely on the Ax LLM to pick and justify shows that fit the viewer's vibe. If the LLM is not configured the entrypoint will abort with a clear error.
 
