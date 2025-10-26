@@ -1,0 +1,9 @@
+{
+  "$schema": "https://railway.app/config/schema/v2.json",
+  "build": {
+    "builder": "DOCKERFILE"
+  },
+  "deploy": {
+    "startCommand": "bun run start"
+  }
+}
