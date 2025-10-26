@@ -9,6 +9,4 @@ COPY . .
 
 EXPOSE 8787
 
-ENV PORT=8787
-
 CMD ["bun", "run", "start"]
