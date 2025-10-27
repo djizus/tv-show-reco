@@ -27,7 +27,7 @@ curl -s http://localhost:8787/entrypoints/recommend/invoke \
         "input": {
           "genre": "sci-fi",
           "mood": "cerebral",
-          "maxResults": 3
+          "numberOfRecommendations": 3
         }
       }' | jq
 ```
@@ -41,7 +41,7 @@ The Ax LLM crafts the recommendations on demand. Missing credentials will result
 | `PORT`                | `8787`  | HTTP port for Bun. |
 | `OPENAI_API_KEY`      | –       | Required for Ax LLM re-ranking. |
 | `PRIVATE_KEY`         | –       | Optional x402 signing key. |
-| `DEFAULT_MAX_RESULTS` | `5`     | Baseline cap when a request omits `maxResults`. |
+| `DEFAULT_RECOMMENDATION_COUNT` | `5`     | Baseline number of recommendations when a request omits `numberOfRecommendations`. Legacy `DEFAULT_MAX_RESULTS` is still honoured as a fallback. |
 | `DEFAULT_PRICE`       | –       | Optional x402 price string (e.g. `$0.001`). |
 
 ## Project Structure

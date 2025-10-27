@@ -1,9 +1,9 @@
 import { randomUUID } from "crypto";
 import { z } from "zod";
 import {
+  AgentKitConfig,
   createAgentApp,
   createAxLLMClient,
-  paymentsFromEnv,
 } from "@lucid-dreams/agent-kit";
 import { flow } from "@ax-llm/ax";
 
@@ -28,32 +28,14 @@ type NormalisedFilters = {
   includeClassics: boolean;
 };
 
-const DEFAULT_MAX_RESULTS = safeParseInt(process.env.DEFAULT_MAX_RESULTS, 5);
-console.log(
-  `[tv-show-recommender] Initialising agent with DEFAULT_MAX_RESULTS=${DEFAULT_MAX_RESULTS}`
+const DEFAULT_RECOMMENDATION_COUNT = safeParseInt(
+  process.env.DEFAULT_RECOMMENDATION_COUNT, 5
 );
-
-const paymentsConfig = paymentsFromEnv({
-  defaultPrice: process.env.DEFAULT_PRICE,
-});
-
-if (paymentsConfig) {
-  console.log(
-    "[tv-show-recommender] Payments configuration detected in environment; monetisation enabled."
-  );
-} else {
-  console.warn(
-    "[tv-show-recommender] No payments configuration found; agent will run without paid fetch."
-  );
-}
-
 const AGENT_NAMESPACE = "tv-show-recommender";
 const AGENT_DISPLAY_NAME = "TV Show Recommender";
 
-const selectedModel = process.env.AX_MODEL?.trim() || "gpt-5-mini";
-
 const axClient = createAxLLMClient({
-  model: selectedModel,
+  model: process.env.AX_MODEL?.trim() || "gpt-5-mini",
   logger: {
     warn(message, error) {
       if (error) {
@@ -65,10 +47,6 @@ const axClient = createAxLLMClient({
   },
 });
 
-console.log(
-  `[${AGENT_NAMESPACE}] Ax LLM client initialised (model=${selectedModel})`
-);
-
 if (!axClient.isConfigured()) {
   console.warn(
     `[${AGENT_NAMESPACE}] Ax LLM provider not configured — requests will fail until an LLM key is provided.`
@@ -76,6 +54,19 @@ if (!axClient.isConfigured()) {
 } else {
   console.log(`[${AGENT_NAMESPACE}] Ax LLM provider ready for requests.`);
 }
+
+const configOverrides: AgentKitConfig = {
+  payments: {
+    facilitatorUrl:
+      (process.env.FACILITATOR_URL as any) ??
+      "https://facilitator.daydreams.systems",
+    payTo:
+      (process.env.PAY_TO as `0x${string}`) ??
+      "0xCD6E8687bd920463cc9E4a28f1998F0B040ab1DC",
+    network: (process.env.NETWORK as any) ?? "base",
+    defaultPrice: process.env.DEFAULT_PRICE ?? "0.03",
+  },
+};
 
 const recommendationFlow = flow<{ prompt: string }>()
   .node(
@@ -92,15 +83,6 @@ const recommendationFlow = flow<{ prompt: string }>()
         : "",
   }));
 
-const { app, addEntrypoint } = createAgentApp(
-  {
-    name: AGENT_DISPLAY_NAME,
-    version: "0.2.0",
-    description:
-      "Curates binge-worthy TV shows that tailors picks to the viewer's vibe.",
-  },
-  paymentsConfig ? { payments: paymentsConfig } : undefined
-);
 
 const inputSchema = z
   .object({
@@ -123,12 +105,12 @@ const inputSchema = z
       .max(32)
       .optional(),
     includeClassics: z.boolean().default(true).optional(),
-    maxResults: z
+    numberOfRecommendations: z
       .number()
       .int()
       .min(1)
       .max(10)
-      .default(DEFAULT_MAX_RESULTS)
+      .default(DEFAULT_RECOMMENDATION_COUNT)
       .optional(),
   })
   .refine(
@@ -139,7 +121,17 @@ const inputSchema = z
     }
   );
 
-type RecommendInput = z.infer<typeof inputSchema>;
+const { app, addEntrypoint } = createAgentApp(
+  {
+    name: AGENT_DISPLAY_NAME,
+    version: "0.0.2",
+    description:
+      "Curates binge-worthy TV shows that tailors picks to the viewer's vibe.",
+  },
+  {
+    config: configOverrides,
+  }
+);
 
 addEntrypoint({
   key: "recommend",
@@ -176,8 +168,8 @@ addEntrypoint({
   async handler({ input }) {
     const requestId = createRequestId();
     try {
-      const maxResults = clamp(
-        input?.maxResults ?? DEFAULT_MAX_RESULTS,
+      const recommendationCount = clamp(
+        input?.numberOfRecommendations ?? DEFAULT_RECOMMENDATION_COUNT,
         1,
         10
       );
@@ -191,7 +183,7 @@ addEntrypoint({
       console.log(
         `[${AGENT_NAMESPACE}] [${requestId}] Incoming recommendation request (filters=${JSON.stringify(
           filters
-        )}, maxResults=${maxResults})`
+        )}, numberOfRecommendations=${recommendationCount})`
       );
 
       const llm = axClient.ax;
@@ -203,7 +195,7 @@ addEntrypoint({
 
       const prompt = buildRecommendationPrompt({
         filters,
-        maxResults,
+        recommendationCount,
       });
 
       console.log(
@@ -228,7 +220,7 @@ addEntrypoint({
 
       const recommendations = parseLlmRecommendations(
         structuredJson,
-        maxResults
+        recommendationCount
       );
 
       console.log(
@@ -251,7 +243,7 @@ addEntrypoint({
 
       return {
         output: {
-          recommendations: recommendations.slice(0, maxResults),
+          recommendations: recommendations.slice(0, recommendationCount),
           totalMatches: recommendations.length,
           filtersApplied: {
             genre: filters.genre,
@@ -278,10 +270,10 @@ addEntrypoint({
 
 function buildRecommendationPrompt({
   filters,
-  maxResults,
+  recommendationCount,
 }: {
   filters: NormalisedFilters;
-  maxResults: number;
+  recommendationCount: number;
 }): string {
   const filterSummary = [
     `genre: ${filters.genre ?? "any"}`,
@@ -311,7 +303,7 @@ function buildRecommendationPrompt({
   return [
     "You are an expert TV curator helping a viewer.",
     `Filters to respect (normalised): ${filterSummary}.`,
-    `Return between 1 and ${maxResults} compelling TV recommendations.`,
+    `Return exactly ${recommendationCount} compelling TV recommendations when possible (never exceed this number).`,
     "Recommendations must be current (no obvious errors) and feel hand-picked for the viewer.",
     "For each title include platforms, relevant genres/moods, and a short 'why it made the list' blurb.",
     "Keep explanations concise (<= 2 sentences) and connect them directly to the viewer's filters.",
@@ -324,7 +316,7 @@ function buildRecommendationPrompt({
 
 function parseLlmRecommendations(
   raw: string,
-  maxResults: number
+  recommendationCount: number
 ): Recommendation[] {
   const schema = z.object({
     recommendations: z
@@ -348,7 +340,7 @@ function parseLlmRecommendations(
         })
       )
       .min(1)
-      .max(maxResults),
+      .max(recommendationCount),
   });
 
   try {
