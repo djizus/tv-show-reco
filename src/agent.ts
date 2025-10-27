@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { z } from "zod";
 import {
   createAgentApp,
@@ -28,16 +29,31 @@ type NormalisedFilters = {
 };
 
 const DEFAULT_MAX_RESULTS = safeParseInt(process.env.DEFAULT_MAX_RESULTS, 5);
+console.log(
+  `[tv-show-recommender] Initialising agent with DEFAULT_MAX_RESULTS=${DEFAULT_MAX_RESULTS}`
+);
 
 const paymentsConfig = paymentsFromEnv({
   defaultPrice: process.env.DEFAULT_PRICE,
 });
 
+if (paymentsConfig) {
+  console.log(
+    "[tv-show-recommender] Payments configuration detected in environment; monetisation enabled."
+  );
+} else {
+  console.warn(
+    "[tv-show-recommender] No payments configuration found; agent will run without paid fetch."
+  );
+}
+
 const AGENT_NAMESPACE = "tv-show-recommender";
 const AGENT_DISPLAY_NAME = "TV Show Recommender";
 
+const selectedModel = process.env.AX_MODEL?.trim() || "gpt-5-mini";
+
 const axClient = createAxLLMClient({
-  model: process.env.AX_MODEL?.trim() || "gpt-5-mini",  
+  model: selectedModel,
   logger: {
     warn(message, error) {
       if (error) {
@@ -49,10 +65,16 @@ const axClient = createAxLLMClient({
   },
 });
 
+console.log(
+  `[${AGENT_NAMESPACE}] Ax LLM client initialised (model=${selectedModel})`
+);
+
 if (!axClient.isConfigured()) {
   console.warn(
     `[${AGENT_NAMESPACE}] Ax LLM provider not configured — requests will fail until an LLM key is provided.`
   );
+} else {
+  console.log(`[${AGENT_NAMESPACE}] Ax LLM provider ready for requests.`);
 }
 
 const recommendationFlow = flow<{ prompt: string }>()
@@ -152,56 +174,105 @@ addEntrypoint({
     fallbackApplied: z.boolean(),
   }),
   async handler({ input }) {
-    const maxResults = clamp(input?.maxResults ?? DEFAULT_MAX_RESULTS, 1, 10);
-    const filters: NormalisedFilters = {
-      genre: normalize(input?.genre),
-      mood: normalize(input?.mood),
-      platform: normalize(input?.platform),
-      includeClassics: input?.includeClassics ?? true,
-    };
-
-    const llm = axClient.ax;
-    if (!llm) {
-      throw new Error(
-        "Ax LLM provider not configured. Set OPENAI_API_KEY or provide a custom client."
+    const requestId = createRequestId();
+    try {
+      const maxResults = clamp(
+        input?.maxResults ?? DEFAULT_MAX_RESULTS,
+        1,
+        10
       );
-    }
+      const filters: NormalisedFilters = {
+        genre: normalize(input?.genre),
+        mood: normalize(input?.mood),
+        platform: normalize(input?.platform),
+        includeClassics: input?.includeClassics ?? true,
+      };
 
-    const prompt = buildRecommendationPrompt({
-      filters,
-      maxResults,
-    });
-
-    const { structuredJson } = await recommendationFlow.forward(llm, {
-      prompt,
-    });
-    const usageEntry = recommendationFlow.getUsage().at(-1);
-    recommendationFlow.resetUsage();
-
-    const recommendations = parseLlmRecommendations(structuredJson, maxResults);
-    if (recommendations.length === 0) {
-      throw new Error(
-        "Ax LLM returned no recommendations—try broadening the filters."
+      console.log(
+        `[${AGENT_NAMESPACE}] [${requestId}] Incoming recommendation request (filters=${JSON.stringify(
+          filters
+        )}, maxResults=${maxResults})`
       );
-    }
 
-    return {
-      output: {
-        recommendations: recommendations.slice(0, maxResults),
-        totalMatches: recommendations.length,
-        filtersApplied: {
-          genre: filters.genre,
-          mood: filters.mood,
-          platform: filters.platform,
-          includeClassics: filters.includeClassics,
+      const llm = axClient.ax;
+      if (!llm) {
+        throw new Error(
+          "Ax LLM provider not configured. Set OPENAI_API_KEY or provide a custom client."
+        );
+      }
+
+      const prompt = buildRecommendationPrompt({
+        filters,
+        maxResults,
+      });
+
+      console.log(
+        `[${AGENT_NAMESPACE}] [${requestId}] Built LLM prompt (length=${prompt.length})`
+      );
+      console.log(
+        `[${AGENT_NAMESPACE}] [${requestId}] Prompt preview: ${summarisePrompt(
+          prompt
+        )}`
+      );
+
+      const { structuredJson } = await recommendationFlow.forward(llm, {
+        prompt,
+      });
+
+      const usageEntry = recommendationFlow.getUsage().at(-1);
+      recommendationFlow.resetUsage();
+
+      console.log(
+        `[${AGENT_NAMESPACE}] [${requestId}] Received structured JSON response (length=${structuredJson.length})`
+      );
+
+      const recommendations = parseLlmRecommendations(
+        structuredJson,
+        maxResults
+      );
+
+      console.log(
+        `[${AGENT_NAMESPACE}] [${requestId}] Parsed ${recommendations.length} recommendations from LLM response.`
+      );
+
+      if (usageEntry) {
+        console.log(
+          `[${AGENT_NAMESPACE}] [${requestId}] LLM usage metadata: ${JSON.stringify(
+            usageEntry
+          )}`
+        );
+      }
+
+      if (recommendations.length === 0) {
+        throw new Error(
+          "Ax LLM returned no recommendations—try broadening the filters."
+        );
+      }
+
+      return {
+        output: {
+          recommendations: recommendations.slice(0, maxResults),
+          totalMatches: recommendations.length,
+          filtersApplied: {
+            genre: filters.genre,
+            mood: filters.mood,
+            platform: filters.platform,
+            includeClassics: filters.includeClassics,
+          },
+          fallbackApplied: false,
         },
-        fallbackApplied: false,
-      },
-      ...(usageEntry?.model ? { model: usageEntry.model } : {}),
-      usage: {
-        total_tokens: recommendations.length,
-      },
-    };
+        ...(usageEntry?.model ? { model: usageEntry.model } : {}),
+        usage: {
+          total_tokens: recommendations.length,
+        },
+      };
+    } catch (error) {
+      console.error(
+        `[${AGENT_NAMESPACE}] [${requestId}] Recommendation handler failed.`,
+        error
+      );
+      throw error;
+    }
   },
 });
 
@@ -327,4 +398,22 @@ function safeParseInt(value: string | undefined, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-export { app };
+function summarisePrompt(prompt: string): string {
+  const flattened = prompt.replace(/\s+/g, " ").trim();
+  if (!flattened) {
+    return "(empty prompt)";
+  }
+  return flattened.length > 160
+    ? `${flattened.slice(0, 160)}…`
+    : flattened;
+}
+
+function createRequestId(): string {
+  try {
+    return randomUUID();
+  } catch {
+    return Math.random().toString(36).slice(2, 10);
+  }
+}
+
+export { app, AGENT_NAMESPACE };
